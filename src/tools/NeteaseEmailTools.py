@@ -19,7 +19,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # 显式指定 .env 文件路径
-load_dotenv("/Users/yhr/Agent/langgraph-email-automation/.env")
+load_dotenv()
 
 
 class NeteaseEmailTools:

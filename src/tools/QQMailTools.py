@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 # 显式指定 .env 文件路径
-load_dotenv("/Users/yhr/Agent/langgraph-email-automation/.env")
+load_dotenv()
 
 
 class QQMailTools:
@@ -451,3 +451,20 @@ class QQMailTools:
             except:
                 pass
             self._smtp_conn = None
+
+    def mark_as_read(self, email_id: str) -> bool:
+        """
+        将指定邮件标记为已读
+
+        @param email_id: 邮件ID
+        @return: 是否成功
+        """
+        try:
+            mail = self._get_imap_connection()
+            mail.select('INBOX')
+            # 使用 \\Seen flag 标记为已读
+            status, _ = mail.store(email_id, '+FLAGS', '\\Seen')
+            return status == 'OK'
+        except Exception as e:
+            print(f"[DEBUG] Mark as read failed: {e}")
+            return False

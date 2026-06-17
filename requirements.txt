@@ -1,9 +1,9 @@
 langchain-core
-langchain_community 
-langgraph 
-langchain-groq 
+langchain_community
+langchain_text_splitters
+langgraph
 langchain_zhipuai
-zhipuai
+zhipuai>=2.1.4.20240929
 langchain_deepseek
 langchain_chroma
 chromadb

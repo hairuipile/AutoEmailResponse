@@ -1,6 +1,5 @@
 from colorama import Fore, Style
 from .agents import Agents
-from .tools.QQEmailTools import QQEmailToolsClass
 from .tools.QQMailTools import QQMailTools
 from .tools.GmailTools import GmailToolsClass
 from .tools.NeteaseEmailTools import NeteaseEmailTools
@@ -86,11 +85,30 @@ class Nodes:
         return {"rag_queries": query_result.queries}
 
     def retrieve_from_rag(self, state: GraphState) -> GraphState:
-        """Retrieves information from internal knowledge based on RAG questions."""
+        """两步式 RAG：先用 src.Rag.retriever 拿 context，再调 LLM 答。"""
         print(Fore.YELLOW + "Retrieving information from internal knowledge...\n" + Style.RESET_ALL)
+        from langchain_core.output_parsers import StrOutputParser
+        from langchain_core.runnables import RunnablePassthrough
+
+        retriever = getattr(self.agents, "retriever", None)
+        if retriever is None:
+            print(Fore.RED + "RAG retriever not available; skipping retrieval." + Style.RESET_ALL)
+            return {"retrieved_documents": ""}
+
         final_answer = ""
         for query in state["rag_queries"]:
-            rag_result = self.agents.generate_rag_answer.invoke(query)
+            # 1) 显式从 src.Rag 拿 context 块
+            docs = retriever.invoke(query)
+            context_text = "\n\n".join(doc.page_content for doc in docs)
+
+            # 2) 调 LLM 基于 context 答（结构与原 generate_rag_answer 链一致）
+            chain = (
+                {"context": lambda _: context_text, "question": RunnablePassthrough()}
+                | self.agents.qa_prompt
+                | self.agents.llm
+                | StrOutputParser()
+            )
+            rag_result = chain.invoke(query)
             final_answer += query + "\n" + rag_result + "\n\n"
 
         return {"retrieved_documents": final_answer}

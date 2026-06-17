@@ -33,7 +33,7 @@ SCOPES = [
 from dotenv import load_dotenv
 
 # 显式指定 .env 文件路径
-load_dotenv("/Users/yhr/Agent/langgraph-email-automation/.env")
+load_dotenv()
 
 
 class GmailToolsClass:
@@ -96,22 +96,12 @@ class GmailToolsClass:
                 date_str = eight_hours_ago.strftime("%Y-%m-%d")
                 # 简化查询：先移除 -from:me 看是否能连接
                 query = f'after:{date_str}'
-                
-                # #region debug log
-                with open("/Users/yhr/Agent/langgraph-email-automation/.cursor/debug-32110b.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"32110b","runId":"debug","hypothesisId":"B","location":"GmailTools.py:fetch_unanswered_emails","message":"Gmail query attempt","data":{"attempt":attempt+1,"query":query},"timestamp":1700000000000}) + "\n")
-                # #endregion
-                
+
                 results = self.service.users().messages().list(
                     userId='me',
                     q=query,
                     maxResults=max_results
                 ).execute()
-
-                # #region debug log
-                with open("/Users/yhr/Agent/langgraph-email-automation/.cursor/debug-32110b.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"32110b","runId":"debug","hypothesisId":"B","location":"GmailTools.py:fetch_unanswered_emails","message":"Gmail API success","data":{"result_keys":list(results.keys()),"messages_count":len(results.get('messages', []))},"timestamp":1700000000001}) + "\n")
-                # #endregion
 
                 messages = results.get('messages', [])
                 if not messages:
@@ -137,11 +127,6 @@ class GmailToolsClass:
                 return emails
 
             except Exception as e:
-                # #region debug log
-                with open("/Users/yhr/Agent/langgraph-email-automation/.cursor/debug-32110b.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"32110b","runId":"debug","hypothesisId":"B","location":"GmailTools.py:fetch_unanswered_emails:exception","message":"API call exception","data":{"attempt":attempt+1,"error_type":type(e).__name__,"error_message":str(e)},"timestamp":1700000000002}) + "\n")
-                # #endregion
-                
                 if attempt < 2:
                     print(f"获取邮件超时，重试中... ({attempt+1}/3)")
                     time.sleep(2)  # 等待2秒后重试

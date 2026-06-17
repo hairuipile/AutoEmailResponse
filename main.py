@@ -1,15 +1,21 @@
 from colorama import Fore, Style
 from dotenv import load_dotenv
+from pathlib import Path
 import os
 
 # Load all env variables FIRST - explicitly specify .env file
-load_dotenv("/Users/yhr/Agent/langgraph-email-automation/.env")
+load_dotenv(Path(__file__).parent / ".env")
 
 # Now import and initialize workflow
 from src.graph import Workflow
+from src.Rag.preprocess import check_and_update
 
-# config 
+# config
 config = {'recursion_limit': 100}
+
+# 检查知识库变化，如有变化则更新向量库
+print(Fore.CYAN + "Checking knowledge base for updates..." + Style.RESET_ALL)
+check_and_update()
 
 workflow = Workflow()
 app = workflow.app
