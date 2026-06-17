@@ -7,6 +7,10 @@ from src.Rag.loader import (
     get_documents,
     split_documents,
 )
+from src.Rag.data_cleaner import (
+    clean_knowledge,
+    clean_knowledge_idempotent,
+)
 from src.Rag.vectorstore import (
     get_embeddings,
     get_vectorstore,
@@ -26,6 +30,9 @@ __all__ = [
     # loader
     "get_documents",
     "split_documents",
+    # data_cleaner
+    "clean_knowledge",
+    "clean_knowledge_idempotent",
     # vectorstore
     "get_embeddings",
     "get_vectorstore",

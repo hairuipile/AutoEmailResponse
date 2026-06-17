@@ -1,0 +1,9 @@
+<!--
+  original_source: main.md
+  h1_title: 其他
+-->
+# 其他
+1. IgM：急性期
+1. IgG：长期存在  
+MHC-I 基因 - CD8⁺T细胞 - 细胞免疫 - 内源型抗原  
+MHC-II基因 - CD4⁺T细胞 - 体液免疫 - 外源性抗原

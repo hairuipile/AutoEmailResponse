@@ -16,6 +16,7 @@ from src.Rag import (
     split_documents,
     VectorIndexer,
     save_manifest,
+    clean_knowledge_idempotent,
 )
 
 
@@ -25,14 +26,16 @@ def run(force_rebuild: bool = False) -> bool:
     print("RAG 知识库预处理")
     print("=" * 50)
 
-    # 0. 检查变化
-    print("\n[0/6] 检查知识库变化...")
+    # 0. 数据清洗：把 context/ 按 H1 拆分为 context/clean_context/
+    print("\n[0/7] 数据清洗（按 H1 拆分大文件）...")
+    clean_knowledge_idempotent()
+    print("\n[1/7] 检查知识库变化...")
     has_changes, new_manifest = check_knowledge_changes()
 
     indexer = VectorIndexer(persist_directory="db")
 
-    # 0.1 同步被删除的源文章（清理孤立块）
-    print("\n[0/6] 同步被删除的源文章...")
+    # 1.1 同步被删除的源文章（清理孤立块）
+    print("\n[1/7] 同步被删除的源文章...")
     removed = indexer.sync_deleted_articles()
 
     if not force_rebuild and not has_changes and removed == 0:
@@ -45,30 +48,30 @@ def run(force_rebuild: bool = False) -> bool:
     if removed > 0:
         print(f"[+] 已清理 {removed} 个孤立块")
 
-    # 1. 加载文档
-    print("\n[1/6] 加载知识文档...")
+    # 2. 加载文档
+    print("\n[2/7] 加载知识文档...")
     documents = get_documents()
 
-    # 2. 分割文档
-    print("\n[2/6] 分割文档为文本块...")
+    # 3. 分割文档
+    print("\n[3/7] 分割文档为文本块...")
     chunks = split_documents(documents)
 
-    # 3. 构建向量索引（同时建立文章↔块关联）
-    print("\n[3/6] 构建向量索引并建立文章↔块关联...")
+    # 4. 构建向量索引（同时建立文章↔块关联）
+    print("\n[4/7] 构建向量索引并建立文章↔块关联...")
     vectorstore = indexer.build_index(chunks)
 
-    # 4. 保存清单
-    print("\n[4/6] 保存源文件清单...")
+    # 5. 保存清单
+    print("\n[5/7] 保存源文件清单...")
     save_manifest(new_manifest)
 
-    # 5. 输出统计
-    print("\n[5/6] 索引统计...")
+    # 6. 输出统计
+    print("\n[6/7] 索引统计...")
     stats = indexer.get_collection_stats()
     print(f"    文档块数量: {stats.get('count', 0)}")
     print(f"    存储路径: {stats.get('persist_directory', 'N/A')}")
 
-    # 6. 最终校验：再次同步确保无遗漏
-    print("\n[6/6] 最终一致性校验...")
+    # 7. 最终校验：再次同步确保无遗漏
+    print("\n[7/7] 最终一致性校验...")
     final_removed = indexer.sync_deleted_articles()
     if final_removed > 0:
         print(f"[!] 校验发现 {final_removed} 个额外孤立块，已清理")
