@@ -10,13 +10,15 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from src.api.logger import qqmail_logger
+from .imap_common import append_to_drafts
 
 # 显式指定 .env 文件路径
 load_dotenv()
 
 
 class QQMailTools:
-    """QQ邮箱工具类，替代GmailTools使用IMAP/SMTP协议"""
+    """QQ邮箱工具类，使用 IMAP/SMTP 协议"""
 
     def __init__(self):
         self.email = os.environ.get('MY_EMAIL', '')
@@ -88,7 +90,7 @@ class QQMailTools:
             return unanswered_emails
 
         except Exception as e:
-            print(f"获取未回复邮件失败: {e}")
+            qqmail_logger.error(f"获取未回复邮件失败: {e}")
             return []
 
     def _get_sent_senders(self):
@@ -97,7 +99,7 @@ class QQMailTools:
         try:
             mail = self._get_imap_connection()
             # 尝试访问已发送文件夹
-            for folder in ['"已发送"', '"Sent"', '[Gmail]/Sent']:
+            for folder in ['"已发送"', '"Sent"']:
                 try:
                     mail.select(folder)
                     status, messages = mail.search(None, 'ALL')
@@ -135,7 +137,7 @@ class QQMailTools:
             return [{'id': msg_id.decode()} for msg_id in email_ids[-max_results:]]
 
         except Exception as error:
-            print(f"获取邮件失败: {error}")
+            qqmail_logger.error(f"获取邮件失败: {error}")
             return []
 
     def fetch_draft_replies(self):
@@ -169,26 +171,17 @@ class QQMailTools:
             return drafts
 
         except Exception as error:
-            print(f"获取草稿失败: {error}")
+            qqmail_logger.error(f"获取草稿失败: {error}")
             return []
 
     def create_draft_reply(self, initial_email, reply_text):
-        """创建草稿回复"""
+        """IMAP 写入草稿箱"""
         try:
-            # 获取发送人邮箱（兼容 dict 和 Pydantic 模型）
-            sender = initial_email.get('sender') if isinstance(initial_email, dict) else getattr(initial_email, 'sender', '')
-            
-            # 创建回复邮件
             message = self._create_reply_message(initial_email, reply_text)
-
-            # 保存到草稿箱
-            smtp = self._get_smtp_connection()
-            smtp.sendmail(self.email, [sender], message.as_bytes())
-
-            return True
-
+            folder = append_to_drafts(self._get_imap_connection(), message.as_bytes(), ['"草稿箱"'])
+            return {"status": "draft_saved", "folder": folder}
         except Exception as error:
-            print(f"创建草稿失败: {error}")
+            qqmail_logger.error(f"创建草稿失败: {error}")
             return None
 
     def send_reply(self, initial_email, reply_text):
@@ -210,7 +203,7 @@ class QQMailTools:
             return True
 
         except Exception as error:
-            print(f"发送邮件失败: {error}")
+            qqmail_logger.error(f"发送邮件失败: {error}")
             return None
 
     def _create_reply_message(self, email_data, reply_text, send=False):
@@ -233,7 +226,7 @@ class QQMailTools:
         # 创建邮件
         message = MIMEMultipart("alternative")
         message["From"] = self.email
-        message["To"] = sender
+        message["To"] = self._extract_email_address(sender)
         message["Subject"] = subject
 
         # 设置回复头
@@ -299,7 +292,7 @@ class QQMailTools:
             }
 
         except Exception as e:
-            print(f"获取邮件信息失败: {e}")
+            qqmail_logger.error(f"获取邮件信息失败: {e}")
             return self._empty_email_info()
 
     def _empty_email_info(self):
@@ -466,5 +459,5 @@ class QQMailTools:
             status, _ = mail.store(email_id, '+FLAGS', '\\Seen')
             return status == 'OK'
         except Exception as e:
-            print(f"[DEBUG] Mark as read failed: {e}")
+            qqmail_logger.debug(f"Mark as read failed: {e}")
             return False

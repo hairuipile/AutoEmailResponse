@@ -1,127 +1,118 @@
-# AutoEmail
+# AutoEmailResponse
 
-# LangGraph 邮件自动化回复系统
+基于 LangGraph 的邮件智能客服系统，支持 **QQ 邮箱** 与 **163 邮箱**。自动拉取待回复邮件，经多智能体流水线生成回复，审校通过后写入邮箱草稿箱，供人工确认发送。
 
-基于 LangGraph 构建的智能邮件客服系统，支持自动拉取待处理邮件、按类别路由、结合 RAG 与长期记忆生成客服回复草稿，并通过审校与重写机制控制输出质量。
+## 工作流程
 
-## 项目定位
+```
+收件箱(IMAP) → 分类 → [产品咨询: RAG检索] → 组装上下文 → 撰写 → 审校 ⇄ 重写(≤3次) → 草稿箱(IMAP)
+                              ↓ 无关邮件 → 跳过
+```
 
-- **适用场景**：SaaS 客户支持、客服邮件分流、高一致性自动回复
-- **运行方式**：逐个处理收件箱中的待回复邮件，生成邮件草稿供人工确认后发送
-- **设计原则**：在回复质量可控的前提下，减少人工重复工作，保持语气、策略与信息安全策略一致
-
-## 核心特性
-
-- 多智能体工作流：分类智能体、RAG 检索智能体、撰写智能体、审校智能体协同完成邮件处理
-- 邮件分类与路由：自动识别产品咨询、投诉反馈、无关邮件，并执行差异化处理策略
-- RAG 知识增强：基于 Chroma 向量库检索内部知识，为产品咨询类邮件提供可溯源依据
-- 长期记忆：按发件人维护历史互动摘要与回复策略，实现个性化回复
-- 上下文预算管理：整合顶层规则、长期记忆、RAG 结果和短期对话历史，控制上下文长度
-- 审校与重写：审校不通过时自动重新组装上下文并重写回复，最多支持 3 轮迭代
+| 邮件类型 | 处理方式 |
+|---------|---------|
+| 产品咨询 | RAG 检索知识库 + 生成回复 |
+| 投诉 / 反馈 | 直接组装上下文生成回复 |
+| 无关邮件 | 跳过 |
 
 ## 技术栈
 
-- 工作流编排：LangGraph
-- 大语言模型：DeepSeek、智谱 AI Embedding
-- 向量检索：Chroma + ZhipuAIEmbeddings
-- 数据存储：SQLite
-- 邮件接入：Gmail API、QQ 邮箱、网易邮箱
-- 运行环境：Python 3.10+，异步执行
+LangGraph · DeepSeek · 智谱 Embedding · Chroma · SQLite · Python 3.10+
 
-## 项目结构
+## 目录结构
 
 ```
-langgraph-email-automation/
-├── main.py                     # 工作流启动入口
-├── requirements.txt            # 依赖清单
-├── context/
-│   └── company_rules.md        # 客服回复顶层规则
+AutoEmailResponse/
+├── main.py                      # 启动入口
+├── requirements.txt
+├── context/                     # 知识库源文件
+│   └── company_rules.md         # 客服回复规则
 ├── src/
-│   ├── state.py                # LangGraph 状态定义
-│   ├── graph.py                # 工作流图与节点路由
-│   ├── agents.py               # LLM 智能体链定义
-│   ├── nodes.py                # 节点业务逻辑
-│   ├── prompts.py              # 提示词模板
-│   ├── structure_outputs.py    # 结构化输出定义
+│   ├── graph.py                 # LangGraph 工作流
+│   ├── nodes.py                 # 节点逻辑
+│   ├── agents.py                # LLM 智能体
+│   ├── prompts.py               # Prompt 模板
 │   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── GmailTools.py       # Gmail API 封装
-│   │   ├── QQEmailTools.py     # QQ 邮箱工具封装
-│   │   ├── QQMailTools.py      # QQ 邮箱兼容封装
-│   │   └── NeteaseEmailTools.py # 网易邮箱工具封装
-│   ├── context/
-│   │   ├── __init__.py
-│   │   └── context_manager.py  # 多层上下文组装与预算控制
-│   └── memory/
-│       ├── __init__.py
-│       └── sender_memory.py    # 发件人长期记忆与检索
-├── db/                         # 本地数据库与向量库
-└── workflow.png                # 工作流示意图
+│   │   ├── QQMailTools.py       # QQ 邮箱 IMAP/SMTP
+│   │   ├── NeteaseEmailTools.py # 163 邮箱 IMAP/SMTP
+│   │   └── imap_common.py       # IMAP 草稿写入
+│   ├── context/                 # 多层上下文组装
+│   ├── memory/                  # 发件人长期记忆
+│   ├── observability/           # Trace 可观测性
+│   └── Rag/                     # 向量索引与检索
+├── eval/                        # RAG 评测（检索 / faithfulness）
+└── db/                          # Chroma 向量库 + SQLite（本地生成，不入库）
 ```
-
-## 工作流概览
-
-1. 从邮箱读取最近未回复邮件
-2. 判断待处理队列是否为空
-3. 对当前邮件进行分类
-4. 对产品咨询类邮件构造检索查询并从内部知识库检索
-5. 组装顶层规则、长期记忆、RAG 结果和短期对话历史
-6. 撰写邮件回复草稿
-7. 审校回复质量
-8. 审校通过则保存草稿；若未通过则在预算范围内重写，最多 3 轮；无关邮件直接跳过
-
-## 环境配置
-
-在项目根目录创建 `.env` 文件，至少包含以下变量：
-
-```bash
-DEEPSEEK_API_KEY=your_deepseek_api_key
-ZHIPU_API_KEY=your_zhipu_api_key
-USE_GMAIL=true
-EMAIL_PROVIDER=qq
-MY_EMAIL=your_email@example.com
-```
-
-首次使用 Gmail 时，程序会触发 OAuth 授权，并生成本地授权文件，请勿提交到代码仓库。
-
-## 公司回复规则
-
-系统会读取 `context/company_rules.md` 作为全局约束，核心要求包括：
-
-- 保持礼貌、简洁、专业
-- 不得承诺未经内部确认的功能、退款、定价例外或 SLA 结果
-- 信息不足时明确说明，并引导用户到正确支持路径
-- 不得暴露内部工具、系统细节或原始推理
-- 对疑似钓鱼、滥用或安全事件，优先输出安全的非破坏性回复
 
 ## 快速开始
 
 ```bash
-# 1. 克隆项目
-git clone <your-repo-url>
-cd langgraph-email-automation
+git clone https://github.com/hairuipile/AutoEmailResponse.git
+cd AutoEmailResponse
 
-# 2. 创建虚拟环境
 python -m venv .venv
-source .venv/bin/activate
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # macOS / Linux
 
-# 3. 安装依赖
 pip install -r requirements.txt
-
-# 4. 配置环境变量
-cp .env.example .env
-# 编辑 .env 并填入真实密钥
-
-# 5. 运行工作流
+cp .env.example .env            # 填入密钥后运行
 python main.py
 ```
 
-程序会按顺序处理收件箱中的新邮件，并在每封邮件处理完成后输出节点执行日志。
+首次运行会自动检测 `context/` 知识库变更并更新向量索引。
 
-## 可扩展方向
+## 环境变量
 
-- 支持审校通过后直接发送邮件
-- 扩展 HTML 富媒体模板与附件支持
-- 抽象邮件服务层，接入更多邮箱服务商
-- 支持向量库在线更新
-- 扩展为多租户或团队隔离的记忆体系
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `EMAIL_PROVIDER` | 否 | `qq`（默认）或 `163` |
+| `MY_EMAIL` | 是 | 邮箱地址 |
+| `QQ_EMAIL_AUTH_CODE` | qq 时 | QQ 邮箱 IMAP/SMTP 授权码 |
+| `NETEASE_EMAIL_AUTH_CODE` | 163 时 | 163 邮箱授权码 |
+| `DEEPSEEK_API_KEY` | 是 | DeepSeek 对话 API |
+| `ZHIPUAI_API_KEY` | 是 | 智谱 Embedding API |
+| `LLM_PROVIDER` | 否 | `DEEPSEEK`（默认）或 `ZHIPUAI` |
+| `TRACE_ENABLED` | 否 | 是否开启 Trace，默认 `true` |
+| `TRACE_LOG_PATH` | 否 | Trace 日志路径，默认 `logs/traces.jsonl` |
+
+### QQ 邮箱
+
+1. [QQ 邮箱](https://mail.qq.com) → 设置 → 账户 → 开启 IMAP/SMTP
+2. 生成授权码 → 填入 `QQ_EMAIL_AUTH_CODE`
+
+```env
+EMAIL_PROVIDER=qq
+MY_EMAIL=your@qq.com
+QQ_EMAIL_AUTH_CODE=xxxx
+```
+
+### 163 邮箱
+
+1. [163 邮箱](https://mail.163.com) → 设置 → POP3/SMTP/IMAP → 开启服务
+2. 生成授权码 → 填入 `NETEASE_EMAIL_AUTH_CODE`
+
+```env
+EMAIL_PROVIDER=163
+MY_EMAIL=your@163.com
+NETEASE_EMAIL_AUTH_CODE=xxxx
+```
+
+## 核心模块
+
+- **分类智能体**：识别产品咨询、投诉、反馈、无关邮件
+- **RAG 检索**：Chroma 向量库检索 `context/` 知识，两步式检索+生成
+- **上下文管理**：顶层规则 + 长期记忆 + RAG 结果 + 短期历史，带 token 预算裁剪
+- **撰写 + 审校**：结构化输出，审校不通过自动重写，最多 3 轮
+- **邮件接入**：IMAP 拉取未回复邮件，IMAP APPEND 写入草稿箱
+
+## 自定义
+
+编辑 `context/company_rules.md` 配置全局回复约束（语气、禁止承诺事项、信息安全等）。
+
+## 评测
+
+```bash
+python eval/build_dataset.py --limit 30          # 合成评估集
+python eval/retrieval_eval.py                    # Recall@K / MRR
+python eval/ragas_eval.py --limit 5              # faithfulness（消耗 API）
+```

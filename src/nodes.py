@@ -1,27 +1,20 @@
 from colorama import Fore, Style
 from .agents import Agents
 from .tools.QQMailTools import QQMailTools
-from .tools.GmailTools import GmailToolsClass
 from .tools.NeteaseEmailTools import NeteaseEmailTools
 from .state import GraphState, Email
 from .context.context_manager import ContextManager
-from .memory.sender_memory import SenderMemoryManager, DatabaseMemoryStore
+from .memory.sender_memory import SenderMemoryManager, DatabaseMemoryStore, build_episode_from_state
+from .observability import annotate, end_email_trace, record_event, start_email_trace, traced_node
 import os
 
 
 def get_email_tools():
     """根据配置获取邮件工具"""
-    use_gmail = os.getenv('USE_GMAIL', 'false').lower() == 'true'
-    if use_gmail:
-        return GmailToolsClass()
-    
-    # 非 Gmail 模式，根据 EMAIL_PROVIDER 选择
-    email_provider = os.getenv('EMAIL_PROVIDER', 'qq').lower()
-    if email_provider == '163' or email_provider == 'netease':
+    provider = os.getenv('EMAIL_PROVIDER', 'qq').lower()
+    if provider in ('163', 'netease'):
         return NeteaseEmailTools()
-    else:
-        # 默认使用 QQ 邮箱
-        return QQMailTools()
+    return QQMailTools()
 
 
 class Nodes:
@@ -32,6 +25,7 @@ class Nodes:
         self.sender_memory = SenderMemoryManager(store=memory_store)
         self.context_manager = ContextManager(sender_memory=self.sender_memory)
 
+    @traced_node("load_inbox_emails")
     def load_new_emails(self, state: GraphState) -> GraphState:
         """Loads new emails from QQ Mail and updates the state."""
         print(Fore.YELLOW + "Loading new emails...\n" + Style.RESET_ALL)
@@ -43,47 +37,48 @@ class Nodes:
         """Checks if there are new emails to process."""
         if len(state['emails']) == 0:
             print(Fore.RED + "No new emails" + Style.RESET_ALL)
+            record_event("route_inbox_check", {"decision": "empty"})
             return "empty"
-        else:
-            print(Fore.GREEN + "New emails to process" + Style.RESET_ALL)
-            return "process"
+        print(Fore.GREEN + "New emails to process" + Style.RESET_ALL)
+        record_event("route_inbox_check", {"decision": "process", "emails_remaining": len(state["emails"])})
+        return "process"
 
+    @traced_node("is_email_inbox_empty")
     def is_email_inbox_empty(self, state: GraphState) -> GraphState:
         return state
 
+    @traced_node("categorize_email")
     def categorize_email(self, state: GraphState) -> GraphState:
         """Categorizes the current email using the categorize_email agent."""
         print(Fore.YELLOW + "Checking email category...\n" + Style.RESET_ALL)
-
-        # Get the last email
         current_email = state["emails"][-1]
+        tid = start_email_trace(current_email)
         result = self.agents.categorize_email.invoke({"email": current_email.body})
         print(Fore.MAGENTA + f"Email category: {result.category.value}" + Style.RESET_ALL)
-
-        return {
-            "email_category": result.category.value,
-            "current_email": current_email
-        }
+        return {"email_category": result.category.value, "current_email": current_email, "trace_id": tid}
 
     def route_email_based_on_category(self, state: GraphState) -> str:
         """Routes the email based on its category."""
         print(Fore.YELLOW + "Routing email based on category...\n" + Style.RESET_ALL)
         category = state["email_category"]
         if category == "product_enquiry":
-            return "product related"
+            decision = "product related"
         elif category == "unrelated":
-            return "unrelated"
+            decision = "unrelated"
         else:
-            return "not product related"
+            decision = "not product related"
+        record_event("route_by_category", {"decision": decision, "category": category}, state=state)
+        return decision
 
+    @traced_node("construct_rag_queries")
     def construct_rag_queries(self, state: GraphState) -> GraphState:
         """Constructs RAG queries based on the email content."""
         print(Fore.YELLOW + "Designing RAG query...\n" + Style.RESET_ALL)
         email_content = state["current_email"].body
         query_result = self.agents.design_rag_queries.invoke({"email": email_content})
-
         return {"rag_queries": query_result.queries}
 
+    @traced_node("retrieve_from_rag")
     def retrieve_from_rag(self, state: GraphState) -> GraphState:
         """两步式 RAG：先用 src.Rag.retriever 拿 context，再调 LLM 答。"""
         print(Fore.YELLOW + "Retrieving information from internal knowledge...\n" + Style.RESET_ALL)
@@ -93,15 +88,15 @@ class Nodes:
         retriever = getattr(self.agents, "retriever", None)
         if retriever is None:
             print(Fore.RED + "RAG retriever not available; skipping retrieval." + Style.RESET_ALL)
+            annotate({"skipped": True, "reason": "retriever_unavailable"})
             return {"retrieved_documents": ""}
 
         final_answer = ""
         for query in state["rag_queries"]:
-            # 1) 显式从 src.Rag 拿 context 块
             docs = retriever.invoke(query)
+            hits = [{"doc_id": d.metadata.get("id") or d.metadata.get("source", ""), "score": d.metadata.get("score")} for d in docs]
+            annotate({"query": query, "hits": hits, "hit_count": len(docs)})
             context_text = "\n\n".join(doc.page_content for doc in docs)
-
-            # 2) 调 LLM 基于 context 答（结构与原 generate_rag_answer 链一致）
             chain = (
                 {"context": lambda _: context_text, "question": RunnablePassthrough()}
                 | self.agents.qa_prompt
@@ -110,24 +105,21 @@ class Nodes:
             )
             rag_result = chain.invoke(query)
             final_answer += query + "\n" + rag_result + "\n\n"
-
         return {"retrieved_documents": final_answer}
 
+    @traced_node("assemble_context")
     def assemble_context(self, state: GraphState) -> GraphState:
         """Assembles all context layers into a single bundle."""
         print(Fore.YELLOW + "Assembling context bundle...\n" + Style.RESET_ALL)
         assembled = self.context_manager.build_context_bundle(state, self.sender_memory)
         return {"assembled_context": assembled}
 
+    @traced_node("email_writer")
     def write_draft_email(self, state: GraphState) -> GraphState:
         """Writes a draft email based on the current email and retrieved information."""
         print(Fore.YELLOW + "Writing draft email...\n" + Style.RESET_ALL)
-
-        # Get assembled context and messages history
         assembled_context = state.get("assembled_context", "")
         writer_messages = state.get("writer_messages", [])
-
-        # Write email
         draft_result = self.agents.email_writer.invoke({
             "context": assembled_context,
             "email_category": state["email_category"],
@@ -136,16 +128,10 @@ class Nodes:
         })
         email = draft_result.email
         trials = state.get("trials", 0) + 1
-
-        # Append writer's draft to the message list
         writer_messages.append(f"**Draft {trials}:**\n{email}")
+        return {"generated_email": email, "trials": trials, "writer_messages": writer_messages}
 
-        return {
-            "generated_email": email,
-            "trials": trials,
-            "writer_messages": writer_messages
-        }
-
+    @traced_node("email_proofreader")
     def verify_generated_email(self, state: GraphState) -> GraphState:
         """Verifies the generated email using the proofreader agent."""
         print(Fore.YELLOW + "Verifying generated email...\n" + Style.RESET_ALL)
@@ -153,14 +139,9 @@ class Nodes:
             "initial_email": state["current_email"].body,
             "generated_email": state["generated_email"],
         })
-
         writer_messages = state.get('writer_messages', [])
         writer_messages.append(f"**Proofreader Feedback:**\n{review.feedback}")
-
-        return {
-            "sendable": review.send,
-            "writer_messages": writer_messages
-        }
+        return {"sendable": review.send, "writer_messages": writer_messages}
 
     def must_rewrite(self, state: GraphState) -> str:
         """Determines if the email needs to be rewritten based on the review and trial count."""
@@ -169,46 +150,50 @@ class Nodes:
             print(Fore.GREEN + "Email is good, ready to be sent!!!" + Style.RESET_ALL)
             state["emails"].pop()
             state["writer_messages"] = []
-            return "send"
+            decision = "send"
         elif state["trials"] >= 3:
             print(Fore.RED + "Email is not good, we reached max trials must stop!!!" + Style.RESET_ALL)
             state["emails"].pop()
             state["writer_messages"] = []
-            return "stop"
+            decision = "stop"
         else:
             print(Fore.RED + "Email is not good, must rewrite it..." + Style.RESET_ALL)
-            return "rewrite"
+            decision = "rewrite"
+        record_event("route_proofreader", {"decision": decision, "trials": state["trials"], "sendable": email_sendable}, state=state)
+        return decision
 
+    @traced_node("save_draft_email")
     def save_draft_email(self, state: GraphState) -> GraphState:
-        """
-        Saves the email reply as a draft (saved as .eml file in drafts directory).
-        """
+        """IMAP 写入草稿箱"""
         print(Fore.YELLOW + "Saving email draft...\n" + Style.RESET_ALL)
-
+        draft_saved, folder, err = False, "", None
         try:
             current_email = state["current_email"]
             reply_text = state["generated_email"]
-
             result = self.email_tools.create_draft_reply(current_email, reply_text)
-
-            if result:
-                if isinstance(result, dict) and result.get("draft_path"):
-                    print(Fore.GREEN + f"Draft saved successfully to: {result['draft_path']}" + Style.RESET_ALL)
-                elif isinstance(result, dict) and result.get("draft_id"):
-                    print(Fore.GREEN + f"Draft saved successfully: {result['draft_id']}" + Style.RESET_ALL)
-                else:
-                    print(Fore.GREEN + "Draft saved successfully." + Style.RESET_ALL)
+            if result and result.get("status") == "draft_saved":
+                draft_saved, folder = True, result.get("folder") or ""
+                print(Fore.GREEN + f"Draft saved to: {folder}" + Style.RESET_ALL)
             else:
                 print(Fore.RED + "Failed to save draft." + Style.RESET_ALL)
-
         except Exception as e:
+            err = str(e)
             print(Fore.RED + f"Error saving draft: {e}" + Style.RESET_ALL)
+        memory_saved = False
+        try:
+            self.sender_memory.save_episode(state["current_email"].sender, build_episode_from_state(state, draft_saved=draft_saved, folder=folder))
+            memory_saved = True
+        except Exception as e:
+            print(Fore.RED + f"Error saving sender memory: {e}" + Style.RESET_ALL)
+        annotate({"draft_saved": draft_saved, "folder": folder, "error": err, "memory_saved": memory_saved})
+        meta = {"draft_saved": draft_saved, "memory_saved": memory_saved, "max_trials_reached": state.get("trials", 0) >= 3 and not state.get("sendable")}
+        end_email_trace("success" if draft_saved else "failed", meta, trace_id=state.get("trace_id"))
+        return {"assembled_context": "", "retrieved_documents": "", "trials": 0, "trace_id": ""}
 
-        # Reset state for next email
-        return {"assembled_context": "", "retrieved_documents": "", "trials": 0}
-
+    @traced_node("skip_unrelated_email")
     def skip_unrelated_email(self, state):
         """Skip unrelated email and remove from emails list."""
         print("Skipping unrelated email...\n")
         state["emails"].pop()
-        return state
+        end_email_trace("skipped", {"reason": "unrelated"}, trace_id=state.get("trace_id"))
+        return {"trace_id": ""}

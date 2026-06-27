@@ -244,9 +244,15 @@ class AdvancedRetriever:
         chunk_ids = [cid for cid, _ in valid]
         try:
             records = self._collection.get(ids=chunk_ids, include=["embeddings", "documents", "metadatas"])
-            embeddings_list: List[List[float]] = records.get("embeddings") or []
-            docs_list: List[str] = records.get("documents") or []
-            metas_list: List[dict] = records.get("metadatas") or []
+            emb_raw = records.get("embeddings")
+            if emb_raw is None:
+                embeddings_list = []
+            elif getattr(emb_raw, "ndim", 0) == 2:
+                embeddings_list = [emb_raw[i] for i in range(emb_raw.shape[0])]
+            else:
+                embeddings_list = list(emb_raw)
+            docs_list = records.get("documents") if records.get("documents") is not None else []
+            metas_list = records.get("metadatas") if records.get("metadatas") is not None else []
         except Exception as e:
             print(f"[!] 批量获取 embeddings 失败: {e}，跳过重排")
             return [(cid, 1.0, doc) for cid, doc in valid]

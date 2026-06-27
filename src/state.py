@@ -31,3 +31,4 @@ class GraphState(TypedDict):
     writer_messages: Annotated[list, add_messages]
     sendable: bool
     trials: int
+    trace_id: str

@@ -3,10 +3,13 @@ __pycache__/
 .venv/
 venv/
 .env
-token.json
-credentials.json
 *.log
 .cursor/
 .vscode/
 db/
 data/
+logs/
+eval/results/
+metadata_cache.json
+token.json
+credentials.json

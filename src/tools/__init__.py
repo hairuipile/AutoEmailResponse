@@ -1,11 +1,6 @@
-"""
-邮件工具模块
-
-提供 QQ 邮箱、163 邮箱和 Gmail 的操作工具
-"""
+"""QQ / 163 邮箱工具"""
 
 from .QQMailTools import QQMailTools
-from .GmailTools import GmailToolsClass
 from .NeteaseEmailTools import NeteaseEmailTools
 
-__all__ = ["QQMailTools", "GmailToolsClass", "NeteaseEmailTools"]
+__all__ = ["QQMailTools", "NeteaseEmailTools"]

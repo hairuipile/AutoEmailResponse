@@ -10,13 +10,16 @@
 import os
 import re
 import ssl
+import uuid
 import imaplib
 import smtplib
+import email
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+from .imap_common import append_to_drafts
 
 # 显式指定 .env 文件路径
 load_dotenv()
@@ -32,9 +35,6 @@ class NeteaseEmailTools:
         self.smtp_port = int(os.getenv('NETEASE_SMTP_PORT', '465'))
         self.imap_server = os.getenv('NETEASE_IMAP_SERVER', 'imap.163.com')
         self.imap_port = int(os.getenv('NETEASE_IMAP_PORT', '993'))
-        
-        print(f"[DEBUG] 邮箱: {self.email}")
-        print(f"[DEBUG] 授权码: {self.auth_code}")
         
         if not self.email or not self.auth_code:
             raise ValueError("请在 .env 中配置 MY_EMAIL 和 NETEASE_EMAIL_AUTH_CODE")
@@ -250,18 +250,28 @@ class NeteaseEmailTools:
             return None
     
     def create_draft_reply(self, initial_email, reply_text):
-        """
-        创建草稿回复（163邮箱通过网页操作草稿，此方法仅打印信息）
-        
-        @param initial_email: 原始邮件对象
-        @param reply_text: 回复内容
-        @return: 提示信息
-        """
-        sender = initial_email.get('sender_email', '')
-        subject = initial_email.get('subject', 'No Subject')
-        print(f"草稿提示: 将回复给 {sender}, 主题: Re: {subject}")
-        print("请登录网页邮箱 https://mail.163.com 查看草稿")
-        return {"status": "draft_created", "note": "请登录网页邮箱查看草稿"}
+        """IMAP 写入草稿箱"""
+        try:
+            sender = self._extract_email_address(initial_email.get('sender_email', initial_email.get('sender', '')))
+            subject = initial_email.get('subject', 'No Subject')
+            if not subject.startswith('Re:'):
+                subject = f'Re: {subject}'
+            message = MIMEMultipart('alternative')
+            message['From'] = self.email
+            message['To'] = sender
+            message['Subject'] = Header(subject, 'utf-8')
+            in_reply_to = initial_email.get('messageId', '')
+            if in_reply_to:
+                message['In-Reply-To'] = in_reply_to
+                references = initial_email.get('references', '')
+                message['References'] = f"{references} {in_reply_to}".strip()
+            message['Message-ID'] = f"<{uuid.uuid4()}@163.com>"
+            message.attach(MIMEText(reply_text, 'plain', 'utf-8'))
+            folder = append_to_drafts(self._create_imap_connection(), message.as_bytes(), ['"草稿"', '"Drafts"', '"草稿箱"'])
+            return {"status": "draft_saved", "folder": folder}
+        except Exception as e:
+            print(f"创建草稿失败: {e}")
+            return None
     
     @staticmethod
     def _decode_header(header):

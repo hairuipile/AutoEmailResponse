@@ -276,3 +276,31 @@ class SenderMemoryManager:
             return (-lexical, -metadata, -recency, -status)
 
         return sorted(episodes, key=sort_key)
+
+
+def _clip(text: str, n: int = 200) -> str:
+    t = (text or "").replace("\n", " ").strip()
+    return t if len(t) <= n else t[:n] + "..."
+
+
+def build_episode_from_state(state, *, draft_saved: bool, folder: str = "") -> SenderEpisode:
+    email = state["current_email"]
+    occurred_at = getattr(email, "occurred_at", "") or datetime.now(timezone.utc).isoformat()
+    summary = f"主题: {_clip(getattr(email, 'subject', ''))} 客户问: {_clip(getattr(email, 'body', ''))} 回复摘要: {_clip(state.get('generated_email', ''))}"
+    return SenderEpisode(
+        sender=email.sender,
+        category=state.get("email_category") or "",
+        sendable=bool(state.get("sendable")),
+        summary=summary,
+        occurred_at=occurred_at,
+        metadata={
+            "subject": getattr(email, "subject", ""),
+            "thread_id": getattr(email, "threadId", ""),
+            "email_id": getattr(email, "id", ""),
+            "message_id": getattr(email, "messageId", ""),
+            "references": getattr(email, "references", ""),
+            "trials": state.get("trials", 0),
+            "draft_saved": draft_saved,
+            "folder": folder,
+        },
+    )

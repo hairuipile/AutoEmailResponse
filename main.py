@@ -9,9 +9,10 @@ load_dotenv(Path(__file__).parent / ".env")
 # Now import and initialize workflow
 from src.graph import Workflow
 from src.Rag.preprocess import check_and_update
+from src.observability import TraceCallbackHandler
 
-# config
-config = {'recursion_limit': 100}
+Path("logs").mkdir(exist_ok=True)
+config = {'recursion_limit': 100, 'callbacks': [TraceCallbackHandler()]}
 
 # 检查知识库变化，如有变化则更新向量库
 print(Fore.CYAN + "Checking knowledge base for updates..." + Style.RESET_ALL)
@@ -45,7 +46,8 @@ initial_state = {
     "context_token_budget": 0,
     "writer_messages": [],
     "sendable": False,
-    "trials": 0
+    "trials": 0,
+    "trace_id": ""
 }
 
 # Run the automation
